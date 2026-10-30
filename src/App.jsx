@@ -1,5 +1,5 @@
-
-import React from 'react';
+import React, { useState } from 'react';
+import { supabase } from './services/supabase';
 import CameraCard from './components/CameraCard';
 import {
   ShieldCheck,
@@ -14,11 +14,71 @@ import {
   MapPin,
   ArrowRight,
   Shield,
-  BadgeCheck
+  BadgeCheck,
+  LoaderCircle,
+  AlertCircle
 } from 'lucide-react';
 import './App.css';
 
+const dadosIniciais = {
+  nome_segurado: '',
+  placa_veiculo: '',
+  modelo_veiculo: '',
+  data_ocorrencia: '',
+  local_acidente: '',
+  descricao: ''
+};
+
 export default function App() {
+  const [dados, setDados] = useState(dadosIniciais);
+  const [fotoUrl, setFotoUrl] = useState(null);
+  const [fotoKey, setFotoKey] = useState(0);
+  const [enviando, setEnviando] = useState(false);
+  const [mensagem, setMensagem] = useState('');
+  const [tipoMensagem, setTipoMensagem] = useState('');
+
+  const atualizarCampo = (evento) => {
+    const { name, value } = evento.target;
+    setDados((anterior) => ({ ...anterior, [name]: value }));
+  };
+
+  const cadastrarOcorrencia = async (evento) => {
+    evento.preventDefault();
+    setEnviando(true);
+    setMensagem('');
+    setTipoMensagem('');
+
+    try {
+      const { error } = await supabase
+        .from('ocorrencias')
+        .insert({
+          nome_segurado: dados.nome_segurado.trim(),
+          placa_veiculo: dados.placa_veiculo.trim().toUpperCase(),
+          modelo_veiculo: dados.modelo_veiculo.trim(),
+          data_ocorrencia: dados.data_ocorrencia,
+          local_acidente: dados.local_acidente.trim(),
+          descricao: dados.descricao.trim(),
+          foto_url: fotoUrl
+        });
+
+      if (error) throw error;
+
+      setMensagem('Ocorrência cadastrada com sucesso no Supabase!');
+      setTipoMensagem('success');
+      setDados(dadosIniciais);
+      setFotoUrl(null);
+      setFotoKey((anterior) => anterior + 1);
+    } catch (error) {
+      console.error('Erro ao cadastrar ocorrência:', error);
+      setMensagem(
+        error?.message || 'Não foi possível cadastrar a ocorrência. Tente novamente.'
+      );
+      setTipoMensagem('error');
+    } finally {
+      setEnviando(false);
+    }
+  };
+
   return (
     <div className="app">
       <header className="topbar">
@@ -44,7 +104,7 @@ export default function App() {
             Suporte
           </a>
 
-          <button className="mobile-menu" aria-label="Menu">
+          <button className="mobile-menu" aria-label="Menu" type="button">
             <Menu />
           </button>
         </div>
@@ -141,7 +201,7 @@ export default function App() {
             </div>
 
             <div className="registration-layout">
-              <div className="form-card">
+              <form className="form-card" onSubmit={cadastrarOcorrencia}>
                 <div className="card-heading">
                   <div className="heading-icon">
                     <CarFront size={23} />
@@ -150,7 +210,9 @@ export default function App() {
                     <h3>Dados da ocorrência</h3>
                     <span>Identificação do sinistro</span>
                   </div>
-                  <span className="status">Em preenchimento</span>
+                  <span className="status">
+                    {enviando ? 'Enviando...' : 'Em preenchimento'}
+                  </span>
                 </div>
 
                 <div className="form-grid">
@@ -158,7 +220,11 @@ export default function App() {
                     Nome do segurado
                     <input
                       type="text"
+                      name="nome_segurado"
                       placeholder="Digite seu nome completo"
+                      value={dados.nome_segurado}
+                      onChange={atualizarCampo}
+                      required
                     />
                   </label>
 
@@ -166,8 +232,12 @@ export default function App() {
                     Placa do veículo
                     <input
                       type="text"
+                      name="placa_veiculo"
                       placeholder="ABC-1234"
                       maxLength={8}
+                      value={dados.placa_veiculo}
+                      onChange={atualizarCampo}
+                      required
                     />
                   </label>
 
@@ -175,13 +245,23 @@ export default function App() {
                     Modelo do veículo
                     <input
                       type="text"
+                      name="modelo_veiculo"
                       placeholder="Ex.: Honda Civic"
+                      value={dados.modelo_veiculo}
+                      onChange={atualizarCampo}
+                      required
                     />
                   </label>
 
                   <label>
                     Data da ocorrência
-                    <input type="date" />
+                    <input
+                      type="date"
+                      name="data_ocorrencia"
+                      value={dados.data_ocorrencia}
+                      onChange={atualizarCampo}
+                      required
+                    />
                   </label>
 
                   <label className="full-width">
@@ -190,7 +270,11 @@ export default function App() {
                       <MapPin size={17} />
                       <input
                         type="text"
+                        name="local_acidente"
                         placeholder="Endereço ou local da ocorrência"
+                        value={dados.local_acidente}
+                        onChange={atualizarCampo}
+                        required
                       />
                     </div>
                   </label>
@@ -199,15 +283,48 @@ export default function App() {
                     Descrição da ocorrência
                     <textarea
                       rows="4"
+                      name="descricao"
                       placeholder="Descreva como aconteceu o acidente..."
+                      value={dados.descricao}
+                      onChange={atualizarCampo}
+                      required
                     />
                   </label>
                 </div>
-              </div>
+
+                <button
+                  type="submit"
+                  className="primary-button"
+                  disabled={enviando}
+                >
+                  {enviando ? (
+                    <>
+                      <LoaderCircle className="spin" size={18} />
+                      Cadastrando ocorrência...
+                    </>
+                  ) : (
+                    <>
+                      Finalizar cadastro
+                      <ArrowRight size={18} />
+                    </>
+                  )}
+                </button>
+
+                {mensagem && (
+                  <div className={`feedback ${tipoMensagem}`} role="status">
+                    {tipoMensagem === 'success' ? (
+                      <CheckCircle2 size={17} />
+                    ) : (
+                      <AlertCircle size={17} />
+                    )}
+                    <span>{mensagem}</span>
+                  </div>
+                )}
+              </form>
 
               <div className="photo-column">
-                <CameraCard />
-                
+                <CameraCard key={fotoKey} onFotoEnviada={setFotoUrl} />
+
                 <div className="help-card">
                   <ShieldCheck size={20} />
                   <div>

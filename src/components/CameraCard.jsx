@@ -1,10 +1,8 @@
 
-import React, { useState } from 'react';
-import {
-  Camera,
-  CameraResultType,
-  CameraSource
-} from '@capacitor/camera';
+import React, { useRef, useState } from 'react';
+
+import { Camera, CameraResultType, CameraSource } from '@capacitor/camera';
+import { Capacitor } from '@capacitor/core';
 
 import {
   Camera as CameraIcon,
@@ -16,57 +14,134 @@ import {
   ShieldCheck
 } from 'lucide-react';
 
-export default function CameraCard() {
+import { supabase } from '../services/supabase';
+
+
+export default function CameraCard({ onFotoEnviada }) {
   const [fotoSinistro, setFotoSinistro] = useState(null);
   const [carregando, setCarregando] = useState(false);
   const [mensagem, setMensagem] = useState('');
   const [tipoMensagem, setTipoMensagem] = useState('');
+  const inputArquivoRef = useRef(null);
+  const urlPreviewRef = useRef(null);
 
-  const capturarSinistro = async () => {
+  const enviarImagem = async (arquivo, previewUrl, extensaoInformada) => {
     setCarregando(true);
     setMensagem('');
     setTipoMensagem('');
 
     try {
-      // Abre o seletor nativo de câmera ou galeria.
+      const extensao = (extensaoInformada || arquivo.type?.split('/')[1] || 'jpeg')
+        .replace('jpeg', 'jpg')
+        .toLowerCase();
+      const nomeArquivo = `sinistros/foto-${Date.now()}.${extensao}`;
+      const tipoArquivo = arquivo.type || 'image/jpeg';
+
+      const { data, error } = await supabase
+        .storage
+        .from('fotos-camera')
+        .upload(nomeArquivo, arquivo, {
+          contentType: tipoArquivo,
+          upsert: false
+        });
+
+      if (error) throw error;
+
+      const { data: urlData } = supabase
+        .storage
+        .from('fotos-camera')
+        .getPublicUrl(data.path);
+
+      setFotoSinistro(previewUrl);
+      onFotoEnviada?.(urlData.publicUrl);
+      setMensagem('Fotografia enviada e armazenada com sucesso!');
+      setTipoMensagem('success');
+    } catch (error) {
+      console.error('Erro ao enviar fotografia:', error);
+      setMensagem(error?.message || 'Não foi possível enviar a fotografia. Tente novamente.');
+      setTipoMensagem('error');
+      onFotoEnviada?.(null);
+    } finally {
+      setCarregando(false);
+    }
+  };
+
+  const capturarNoDispositivo = async () => {
+    setMensagem('');
+    setTipoMensagem('');
+
+    try {
       const image = await Camera.getPhoto({
         quality: 90,
         allowEditing: true,
         resultType: CameraResultType.Uri,
         source: CameraSource.Prompt,
-
         promptLabelHeader: 'Registrar sinistro',
         promptLabelPhoto: 'Escolher da galeria',
         promptLabelPicture: 'Tirar uma foto'
       });
 
-      // Verifica se o Capacitor retornou uma imagem válida.
-      if (image && image.webPath) {
-        setFotoSinistro(image.webPath);
-        setMensagem('Fotografia registrada com sucesso!');
-        setTipoMensagem('success');
-      } else {
+      if (!image?.webPath) {
         throw new Error('A imagem não retornou um endereço válido.');
       }
 
+      setCarregando(true);
+      const resposta = await fetch(image.webPath);
+      if (!resposta.ok) throw new Error('Não foi possível ler a imagem selecionada.');
+
+      const arquivo = await resposta.blob();
+      await enviarImagem(arquivo, image.webPath, image.format || 'jpeg');
     } catch (error) {
-      // Trata cancelamento ou falha sem derrubar a aplicação.
       console.warn('Captura cancelada ou erro:', error);
-
-      setMensagem(
-        'A operação foi cancelada ou não foi possível acessar a imagem. Você pode tentar novamente.'
-      );
-
-      setTipoMensagem('error');
-
-    } finally {
-      // Encerra o carregamento mesmo quando ocorre um erro.
+      // Cancelar o seletor nativo não deve deixar o botão travado.
+      if (error?.message && !/cancel|user cancelled|canceled/i.test(error.message)) {
+        setMensagem(error.message);
+        setTipoMensagem('error');
+      }
       setCarregando(false);
     }
   };
 
+  const abrirSeletor = () => {
+    setMensagem('');
+    setTipoMensagem('');
+
+    if (Capacitor.isNativePlatform()) {
+      capturarNoDispositivo();
+    } else {
+      // No navegador, usa o seletor de arquivos nativo do próprio navegador.
+      inputArquivoRef.current?.click();
+    }
+  };
+
+  const selecionarArquivo = async (evento) => {
+    const arquivo = evento.target.files?.[0];
+    // Permite selecionar novamente a mesma imagem depois.
+    evento.target.value = '';
+
+    if (!arquivo) return;
+    if (!arquivo.type.startsWith('image/')) {
+      setMensagem('Selecione um arquivo de imagem válido.');
+      setTipoMensagem('error');
+      return;
+    }
+
+    if (urlPreviewRef.current) {
+      URL.revokeObjectURL(urlPreviewRef.current);
+    }
+
+    const previewUrl = URL.createObjectURL(arquivo);
+    urlPreviewRef.current = previewUrl;
+    await enviarImagem(arquivo, previewUrl);
+  };
+
   const removerFoto = () => {
+    if (urlPreviewRef.current) {
+      URL.revokeObjectURL(urlPreviewRef.current);
+      urlPreviewRef.current = null;
+    }
     setFotoSinistro(null);
+    onFotoEnviada?.(null);
     setMensagem('');
     setTipoMensagem('');
   };
@@ -77,7 +152,6 @@ export default function CameraCard() {
         <div className="heading-icon">
           <CameraIcon size={23} />
         </div>
-
         <div>
           <h3>Fotografias do sinistro</h3>
           <span>Registro visual dos danos</span>
@@ -85,14 +159,20 @@ export default function CameraCard() {
       </div>
 
       <div className="camera-content">
+        <input
+          ref={inputArquivoRef}
+          type="file"
+          accept="image/*"
+          onChange={selecionarArquivo}
+          style={{ display: 'none' }}
+        />
+
         {!fotoSinistro ? (
           <div className="empty-photo">
             <div className="empty-camera-icon">
               <CameraIcon size={36} />
             </div>
-
             <h4>Nenhuma foto adicionada</h4>
-
             <p>
               Abra sua câmera ou escolha uma imagem
               salva no seu dispositivo.
@@ -104,16 +184,15 @@ export default function CameraCard() {
               src={fotoSinistro}
               alt="Fotografia do sinistro automotivo"
             />
-
             <button
               type="button"
               className="remove-photo"
               onClick={removerFoto}
               aria-label="Remover fotografia"
+              disabled={carregando}
             >
               <X size={18} />
             </button>
-
             <div className="photo-label">
               <CheckCircle2 size={16} />
               Foto adicionada
@@ -124,13 +203,13 @@ export default function CameraCard() {
         <button
           type="button"
           className="camera-button"
-          onClick={capturarSinistro}
+          onClick={abrirSeletor}
           disabled={carregando}
         >
           {carregando ? (
             <>
               <LoaderCircle className="spin" size={19} />
-              Abrindo câmera...
+              Enviando fotografia...
             </>
           ) : (
             <>
@@ -159,7 +238,7 @@ export default function CameraCard() {
 
       <div className="camera-footer">
         <ShieldCheck size={15} />
-        Imagens exibidas diretamente na aplicação.
+        Imagens armazenadas no Supabase Storage.
       </div>
     </div>
   );
